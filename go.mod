@@ -38,3 +38,5 @@ require (
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.35.0 // indirect
 )
+
+replace github.com/googleapis/gax-go/v2 => ../gax-go/v2

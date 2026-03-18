@@ -13,12 +13,14 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"time"
 
 	"cloud.google.com/go/auth"
 	"cloud.google.com/go/auth/credentials"
 	"cloud.google.com/go/auth/httptransport"
 	"cloud.google.com/go/auth/oauth2adapt"
+	"github.com/googleapis/gax-go/v2"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"golang.org/x/net/http2"
 	"golang.org/x/oauth2"
@@ -161,7 +163,11 @@ func NewTransport(ctx context.Context, base http.RoundTripper, opts ...option.Cl
 		}
 		return client.Transport, nil
 	}
-	return newTransport(ctx, base, settings)
+	trans, err := newTransport(ctx, base, settings)
+	if err != nil {
+		return nil, err
+	}
+	return trans, nil
 }
 
 func newTransport(ctx context.Context, base http.RoundTripper, settings *internal.DialSettings) (http.RoundTripper, error) {
@@ -247,6 +253,29 @@ func (t *parameterTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return rt.RoundTrip(&newReq)
 }
 
+type otelAttributeTransport struct {
+	base http.RoundTripper
+}
+
+func (t *otelAttributeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+
+	data := gax.ExtractTransportTelemetry(req.Context())
+	if data != nil {
+		if req.URL != nil {
+			data.SetServerAddress(req.URL.Hostname())
+			if port, pErr := strconv.Atoi(req.URL.Port()); pErr == nil {
+				data.SetServerPort(port)
+			}
+		}
+		if resp != nil {
+			data.SetResponseStatusCode(resp.StatusCode)
+		}
+	}
+
+	return resp, err
+}
+
 // defaultBaseTransport returns the base HTTP transport. It uses a default
 // transport, taking most defaults from http.DefaultTransport.
 // If TLSCertificate is available, set TLSClientConfig as well.
@@ -309,7 +338,7 @@ func addOpenTelemetryTransport(trans http.RoundTripper, settings *internal.DialS
 	if settings.TelemetryDisabled {
 		return trans
 	}
-	return otelhttp.NewTransport(trans)
+	return otelhttp.NewTransport(&otelAttributeTransport{base: trans})
 }
 
 // clonedTransport returns the given RoundTripper as a cloned *http.Transport.
